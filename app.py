@@ -37,50 +37,29 @@ def extract_with_pdfplumber(pdf_bytes):
     if not all_tables:
         return []
 
-    # Determine the dominant column count (most common across all tables)
-    from collections import Counter
-    col_counts = Counter(max(len(r) for r in t) for t in all_tables)
-    dominant_cols = col_counts.most_common(1)[0][0]
-
-    # Merge all tables that match dominant column count into one list
-    merged = []
+    # Normalize each table's rows to its own max col count
+    result = []
     for table in all_tables:
-        # Normalize each row to dominant_cols
-        for row in table:
-            normalized = (row + [''] * dominant_cols)[:dominant_cols]
-            merged.append(normalized)
+        max_cols = max(len(r) for r in table)
+        normalized = [(r + [''] * max_cols)[:max_cols] for r in table]
+        result.append(normalized)
 
-    return merged
+    return result
 
 # ── XLSX export ───────────────────────────────────────────────────────────────
-def rows_to_xlsx(all_rows):
-    from openpyxl import Workbook
+def write_sheet(ws, rows):
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = 'Sheet1'
 
     thin = Side(style='thin', color='CCCCCC')
     bdr = Border(left=thin, right=thin, top=thin, bottom=thin)
     hdr_fill = PatternFill(start_color='1F4E79', end_color='1F4E79', fill_type='solid')
     alt_fill = PatternFill(start_color='EBF3FA', end_color='EBF3FA', fill_type='solid')
 
-    if not all_rows:
-        return None
-
-    # Trim trailing empty columns
-    real_max = 0
-    for row in all_rows:
-        for i in range(len(row)-1, -1, -1):
-            if row[i].strip():
-                real_max = max(real_max, i+1)
-                break
-    max_cols = real_max or max(len(r) for r in all_rows)
+    max_cols = max(len(r) for r in rows) if rows else 0
     col_max = {}
 
-    for r_idx, row in enumerate(all_rows):
+    for r_idx, row in enumerate(rows):
         is_hdr = r_idx == 0
         for c_idx in range(max_cols):
             val = row[c_idx] if c_idx < len(row) else ''
@@ -89,12 +68,37 @@ def rows_to_xlsx(all_rows):
             cell.font = Font(bold=True, color='FFFFFF', size=10) if is_hdr else Font(size=10)
             cell.fill = hdr_fill if is_hdr else (alt_fill if r_idx % 2 == 0 else PatternFill())
             cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
-            col_max[c_idx + 1] = max(col_max.get(c_idx + 1, 8), len(val))
+            col_max[c_idx + 1] = max(col_max.get(c_idx + 1, 8), len(str(val)))
 
     for ci, ml in col_max.items():
         ws.column_dimensions[get_column_letter(ci)].width = min(ml + 3, 50)
-    ws.freeze_panes = 'A2'
+    if rows:
+        ws.freeze_panes = 'A2'
 
+def tables_to_xlsx(all_tables):
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.remove(wb.active)  # remove default sheet
+
+    for i, rows in enumerate(all_tables, 1):
+        ws = wb.create_sheet(title=f'Table {i}')
+        write_sheet(ws, rows)
+
+    if not wb.sheetnames:
+        return None
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
+
+def rows_to_xlsx(all_rows):
+    """Single-sheet export (kept for compatibility)."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Sheet1'
+    write_sheet(ws, all_rows)
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -116,18 +120,17 @@ def convert():
         warning = None
 
         if pdf_type == 'text':
-            rows = extract_with_pdfplumber(pdf_bytes)
-            if not rows:
+            all_tables = extract_with_pdfplumber(pdf_bytes)
+            if not all_tables:
                 return jsonify({'error': 'No content could be extracted from this PDF.'}), 422
-            xlsx_bytes = rows_to_xlsx(rows)
+            xlsx_bytes = tables_to_xlsx(all_tables)
             method = 'pdfplumber'
         else:
-            # Scanned PDF — warn user, try pdfplumber anyway
-            rows = extract_with_pdfplumber(pdf_bytes)
+            all_tables = extract_with_pdfplumber(pdf_bytes)
             warning = 'Scanned PDF detected. Results may be lower accuracy.'
-            if not rows:
+            if not all_tables:
                 return jsonify({'error': 'No content could be extracted. This appears to be a scanned image PDF.'}), 422
-            xlsx_bytes = rows_to_xlsx(rows)
+            xlsx_bytes = tables_to_xlsx(all_tables)
             method = 'pdfplumber-scanned'
 
         if not xlsx_bytes:
