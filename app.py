@@ -15,46 +15,42 @@ def detect_pdf_type(pdf_bytes):
 # ── pdfplumber extraction (primary) ──────────────────────────────────────────
 def extract_with_pdfplumber(pdf_bytes):
     import pdfplumber
-    all_rows = []
+    all_tables = []  # list of (table_rows)
+
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
             tables = page.extract_tables()
-            if tables:
-                for table in tables:
-                    for row in table:
-                        clean = [str(c or '').replace('\n', ' ').strip() for c in row]
-                        if any(c for c in clean if c):
-                            all_rows.append(clean)
-            else:
-                # Word-level fallback with X-position column clustering
-                words = page.extract_words(x_tolerance=3, y_tolerance=3)
-                if not words:
-                    continue
-                rows_map = {}
-                for w in words:
-                    y_key = round(w['top'] / 5) * 5
-                    rows_map.setdefault(y_key, []).append(w)
-                all_x = sorted(set(round(w['x0']) for w in words))
-                col_centers = []
-                for x in all_x:
-                    found = next((c for c in col_centers if abs(c['center'] - x) < 20), None)
-                    if found:
-                        found['xs'].append(x)
-                        found['center'] = sum(found['xs']) / len(found['xs'])
-                    else:
-                        col_centers.append({'center': x, 'xs': [x]})
-                col_centers.sort(key=lambda c: c['center'])
-                min_seen = max(1, len(rows_map) // 5)
-                cols = [c for c in col_centers if len(c['xs']) >= min_seen] or col_centers
-                for y_key in sorted(rows_map.keys()):
-                    row_words = sorted(rows_map[y_key], key=lambda w: w['x0'])
-                    row = [''] * len(cols)
-                    for w in row_words:
-                        best = min(range(len(cols)), key=lambda i: abs(cols[i]['center'] - w['x0']))
-                        row[best] = (row[best] + ' ' + w['text']).strip()
-                    if any(row):
-                        all_rows.append(row)
-    return all_rows
+            for table in (tables or []):
+                rows = []
+                for row in table:
+                    clean = [str(c or '').replace('\n', ' ').strip() for c in row]
+                    non_empty = [c for c in clean if c]
+                    if not non_empty:
+                        continue
+                    # Skip rows where all content is in a single cell (header/address blocks)
+                    if len(non_empty) == 1 and len(clean) > 2:
+                        continue
+                    rows.append(clean)
+                if rows:
+                    all_tables.append(rows)
+
+    if not all_tables:
+        return []
+
+    # Determine the dominant column count (most common across all tables)
+    from collections import Counter
+    col_counts = Counter(max(len(r) for r in t) for t in all_tables)
+    dominant_cols = col_counts.most_common(1)[0][0]
+
+    # Merge all tables that match dominant column count into one list
+    merged = []
+    for table in all_tables:
+        # Normalize each row to dominant_cols
+        for row in table:
+            normalized = (row + [''] * dominant_cols)[:dominant_cols]
+            merged.append(normalized)
+
+    return merged
 
 # ── XLSX export ───────────────────────────────────────────────────────────────
 def rows_to_xlsx(all_rows):
