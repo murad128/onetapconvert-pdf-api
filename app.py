@@ -342,3 +342,17 @@ def health():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
+# ── Keep-alive: ping self every 10 minutes to prevent Render sleep ────────────
+import threading, time, urllib.request
+
+def keep_alive():
+    time.sleep(60)  # wait 1 min after startup
+    while True:
+        try:
+            urllib.request.urlopen('https://onetapconvert-pdf-api.onrender.com/health', timeout=10)
+        except Exception:
+            pass
+        time.sleep(600)  # 10 minutes
+
+threading.Thread(target=keep_alive, daemon=True).start()
