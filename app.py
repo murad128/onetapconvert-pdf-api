@@ -35,7 +35,16 @@ def extract_with_pdfplumber(pdf_bytes):
                     all_tables.append(rows)
 
     if not all_tables:
-        return []
+        # Fallback: extract all text as single-column rows
+        fallback_rows = []
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ''
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line:
+                        fallback_rows.append([line])
+        return [fallback_rows] if fallback_rows else []
 
     # Normalize each table's rows to its own max col count
     result = []
