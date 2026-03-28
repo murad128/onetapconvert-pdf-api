@@ -5,60 +5,36 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-ILOVEPDF_PUBLIC  = 'project_public_ed073f8c4b49df5133977adf95d2b164__ccI3705d8cb2e8f956d14fe45a1065075c0b'
-ILOVEPDF_SECRET  = 'secret_key_bd6896753a236ed482e7314193927b10_mRf1h55f86e331e672c4db911f9b38a6f2145'
+PDFCO_API_KEY = 'mmustafayev232@gmail.com_1vJVZVq8uNlMMCzcJQ7hJalRtMJnCb9VEM9k4qJLUb02452t33H89p1U29VfmjvL'
 
-# ── iLovePDF convert ──────────────────────────────────────────────────────────
-def convert_via_ilovepdf(pdf_bytes, file_name):
+# ── pdf.co convert ────────────────────────────────────────────────────────────
+def convert_via_pdfco(pdf_bytes, file_name):
     import requests
 
-    # 1. Authenticate
-    auth = requests.post('https://api.ilovepdf.com/v1/auth',
-        json={'public_key': ILOVEPDF_PUBLIC, 'secret_key': ILOVEPDF_SECRET},
-        timeout=20)
-    auth.raise_for_status()
-    token = auth.json()['token']
-    headers = {'Authorization': f'Bearer {token}'}
-
-    # 2. Start task
-    task = requests.get('https://api.ilovepdf.com/v1/start/pdftoxlsx', headers=headers, timeout=20)
-    task.raise_for_status()
-    task_data = task.json()
-    server   = task_data['server']
-    task_id  = task_data['task']
-
-    # 3. Upload file
-    upload = requests.post(
-        f'https://{server}/v1/upload',
-        headers=headers,
-        data={'task': task_id},
-        files={'file': (file_name, io.BytesIO(pdf_bytes), 'application/pdf')},
-        timeout=60
-    )
+    # 1. Upload file
+    upload = requests.post('https://api.pdf.co/v1/file/upload/base64',
+        headers={'x-api-key': PDFCO_API_KEY},
+        json={'file': base64.b64encode(pdf_bytes).decode('utf-8'), 'name': file_name},
+        timeout=60)
     upload.raise_for_status()
-    server_filename = upload.json()['server_filename']
+    upload_data = upload.json()
+    if upload_data.get('error'):
+        raise Exception('Upload failed: ' + upload_data.get('message', ''))
 
-    # 4. Process
-    process = requests.post(
-        f'https://{server}/v1/process',
-        headers=headers,
-        json={
-            'task': task_id,
-            'tool': 'pdftoxlsx',
-            'files': [{'server_filename': server_filename, 'filename': file_name}]
-        },
-        timeout=120
-    )
-    process.raise_for_status()
+    # 2. Convert to XLSX
+    convert = requests.post('https://api.pdf.co/v1/pdf/convert/to/xlsx',
+        headers={'x-api-key': PDFCO_API_KEY},
+        json={'url': upload_data['url'], 'inline': False, 'async': False},
+        timeout=90)
+    convert.raise_for_status()
+    convert_data = convert.json()
+    if convert_data.get('error'):
+        raise Exception('Convert failed: ' + convert_data.get('message', ''))
 
-    # 5. Download result
-    download = requests.get(
-        f'https://{server}/v1/download/{task_id}',
-        headers=headers,
-        timeout=60
-    )
-    download.raise_for_status()
-    return download.content
+    # 3. Download result
+    dl = requests.get(convert_data['url'], timeout=60)
+    dl.raise_for_status()
+    return dl.content
 
 # ── Fallback: pdfplumber ──────────────────────────────────────────────────────
 def detect_pdf_type(pdf_bytes):
@@ -161,13 +137,13 @@ def convert():
         pdf_bytes = base64.b64decode(file_b64)
         out_name = file_name.rsplit('.', 1)[0] + '.xlsx'
 
-        # Try iLovePDF first
+        # Try pdf.co first
         try:
-            xlsx_bytes = convert_via_ilovepdf(pdf_bytes, file_name)
+            xlsx_bytes = convert_via_pdfco(pdf_bytes, file_name)
             xlsx_b64 = base64.b64encode(xlsx_bytes).decode('utf-8')
-            return jsonify({'base64': xlsx_b64, 'fileName': out_name, 'method': 'ilovepdf', 'warning': None})
+            return jsonify({'base64': xlsx_b64, 'fileName': out_name, 'method': 'pdfco', 'warning': None})
         except Exception as e:
-            print(f'iLovePDF failed: {e}, falling back to pdfplumber')
+            print(f'pdf.co failed: {e}, falling back to pdfplumber')
 
         # Fallback: pdfplumber
         tables = extract_with_pdfplumber(pdf_bytes)
