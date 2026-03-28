@@ -182,6 +182,57 @@ def convert():
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
+@app.route('/office-to-pdf', methods=['POST'])
+def office_to_pdf():
+    """Convert Word/Excel/PPT to PDF using LibreOffice."""
+    import subprocess, tempfile, os
+    try:
+        data = request.get_json()
+        file_b64 = data.get('fileBase64', '')
+        file_name = data.get('fileName', 'input.docx')
+        if not file_b64:
+            return jsonify({'error': 'No file provided'}), 400
+
+        file_bytes = base64.b64decode(file_b64)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            in_path = os.path.join(tmpdir, file_name)
+            with open(in_path, 'wb') as f:
+                f.write(file_bytes)
+
+            # Run LibreOffice headless conversion
+            result = subprocess.run([
+                'libreoffice', '--headless', '--convert-to', 'pdf',
+                '--outdir', tmpdir, in_path
+            ], capture_output=True, text=True, timeout=60)
+
+            if result.returncode != 0:
+                return jsonify({'error': 'Conversion failed: ' + result.stderr[:200]}), 500
+
+            # Find output PDF
+            out_name = os.path.splitext(file_name)[0] + '.pdf'
+            out_path = os.path.join(tmpdir, out_name)
+            if not os.path.exists(out_path):
+                # Try to find any PDF in tmpdir
+                pdfs = [f for f in os.listdir(tmpdir) if f.endswith('.pdf')]
+                if not pdfs:
+                    return jsonify({'error': 'Output PDF not found'}), 500
+                out_path = os.path.join(tmpdir, pdfs[0])
+                out_name = pdfs[0]
+
+            with open(out_path, 'rb') as f:
+                pdf_bytes = f.read()
+
+            return jsonify({
+                'base64': base64.b64encode(pdf_bytes).decode('utf-8'),
+                'fileName': out_name
+            })
+
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'Conversion timed out'}), 504
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok'})

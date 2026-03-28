@@ -3,6 +3,12 @@ FROM python:3.11-slim
 RUN apt-get update && apt-get install -y \
     poppler-utils \
     gcc \
+    libreoffice \
+    libreoffice-writer \
+    libreoffice-calc \
+    libreoffice-impress \
+    fonts-liberation \
+    fonts-dejavu \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
