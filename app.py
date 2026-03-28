@@ -74,7 +74,14 @@ def rows_to_xlsx(all_rows):
     if not all_rows:
         return None
 
-    max_cols = max(len(r) for r in all_rows)
+    # Trim trailing empty columns
+    real_max = 0
+    for row in all_rows:
+        for i in range(len(row)-1, -1, -1):
+            if row[i].strip():
+                real_max = max(real_max, i+1)
+                break
+    max_cols = real_max or max(len(r) for r in all_rows)
     col_max = {}
 
     for r_idx, row in enumerate(all_rows):
