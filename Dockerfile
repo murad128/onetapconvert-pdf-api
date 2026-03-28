@@ -1,14 +1,20 @@
 FROM python:3.11-slim
 
-# Install system dependencies for OCR and PDF processing
+# System dependencies
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-aze \
     tesseract-ocr-rus \
     tesseract-ocr-chi-sim \
+    tesseract-ocr-eng \
     poppler-utils \
     libpoppler-cpp-dev \
+    ghostscript \
+    default-jre-headless \
+    libgl1 \
+    libglib2.0-0 \
     gcc \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
