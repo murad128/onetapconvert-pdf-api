@@ -1,59 +1,32 @@
-import os, io, base64, json, tempfile, threading, time, urllib.request
+import os, io, base64, threading, time, urllib.request
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-PDFCO_API_KEY = 'mmustafayev232@gmail.com_1vJVZVq8uNlMMCzcJQ7hJalRtMJnCb9VEM9k4qJLUb02452t33H89p1U29VfmjvL'
-
-# ── pdf.co convert ────────────────────────────────────────────────────────────
-def convert_via_pdfco(pdf_bytes, file_name):
-    import requests
-
-    # 1. Upload file
-    upload = requests.post('https://api.pdf.co/v1/file/upload/base64',
-        headers={'x-api-key': PDFCO_API_KEY},
-        json={'file': base64.b64encode(pdf_bytes).decode('utf-8'), 'name': file_name},
-        timeout=60)
-    upload.raise_for_status()
-    upload_data = upload.json()
-    if upload_data.get('error'):
-        raise Exception('Upload failed: ' + upload_data.get('message', ''))
-
-    # 2. Convert to XLSX
-    convert = requests.post('https://api.pdf.co/v1/pdf/convert/to/xlsx',
-        headers={'x-api-key': PDFCO_API_KEY},
-        json={'url': upload_data['url'], 'inline': False, 'async': False},
-        timeout=90)
-    convert.raise_for_status()
-    convert_data = convert.json()
-    if convert_data.get('error'):
-        raise Exception('Convert failed: ' + convert_data.get('message', ''))
-
-    # 3. Download result
-    dl = requests.get(convert_data['url'], timeout=60)
-    dl.raise_for_status()
-    return dl.content
-
-# ── Fallback: pdfplumber ──────────────────────────────────────────────────────
+# ── PDF type detection ────────────────────────────────────────────────────────
 def detect_pdf_type(pdf_bytes):
     import pdfplumber
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         total_chars = sum(len((p.extract_text() or '').strip()) for p in pdf.pages[:3])
     return 'text' if total_chars > 80 else 'scanned'
 
+# ── pdfplumber extraction (primary) ──────────────────────────────────────────
 def extract_with_pdfplumber(pdf_bytes):
     import pdfplumber
-    all_tables = []
+    all_rows = []
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page_num, page in enumerate(pdf.pages, 1):
+        for page in pdf.pages:
             tables = page.extract_tables()
-            for table in (tables or []):
-                clean = [[str(c or '').strip() for c in row] for row in table if any(c for c in row)]
-                if len(clean) > 1:
-                    all_tables.append({'data': clean, 'page': page_num})
-            if not tables:
+            if tables:
+                for table in tables:
+                    for row in table:
+                        clean = [str(c or '').replace('\n', ' ').strip() for c in row]
+                        if any(c for c in clean if c):
+                            all_rows.append(clean)
+            else:
+                # Word-level fallback with X-position column clustering
                 words = page.extract_words(x_tolerance=3, y_tolerance=3)
                 if not words:
                     continue
@@ -61,67 +34,67 @@ def extract_with_pdfplumber(pdf_bytes):
                 for w in words:
                     y_key = round(w['top'] / 5) * 5
                     rows_map.setdefault(y_key, []).append(w)
-                all_x = [w['x0'] for w in words]
+                all_x = sorted(set(round(w['x0']) for w in words))
                 col_centers = []
-                for x in sorted(all_x):
+                for x in all_x:
                     found = next((c for c in col_centers if abs(c['center'] - x) < 20), None)
                     if found:
-                        found['xs'].append(x); found['center'] = sum(found['xs']) / len(found['xs'])
+                        found['xs'].append(x)
+                        found['center'] = sum(found['xs']) / len(found['xs'])
                     else:
                         col_centers.append({'center': x, 'xs': [x]})
                 col_centers.sort(key=lambda c: c['center'])
-                cols = [c for c in col_centers if len(c['xs']) >= max(1, len(rows_map) // 4)] or col_centers
-                result_rows = []
+                min_seen = max(1, len(rows_map) // 5)
+                cols = [c for c in col_centers if len(c['xs']) >= min_seen] or col_centers
                 for y_key in sorted(rows_map.keys()):
                     row_words = sorted(rows_map[y_key], key=lambda w: w['x0'])
                     row = [''] * len(cols)
                     for w in row_words:
-                        best_col = min(range(len(cols)), key=lambda i: abs(cols[i]['center'] - w['x0']))
-                        row[best_col] = (row[best_col] + ' ' + w['text']).strip()
+                        best = min(range(len(cols)), key=lambda i: abs(cols[i]['center'] - w['x0']))
+                        row[best] = (row[best] + ' ' + w['text']).strip()
                     if any(row):
-                        result_rows.append(row)
-                if result_rows:
-                    all_tables.append({'data': result_rows, 'page': page_num, 'fallback': True})
-    return all_tables
+                        all_rows.append(row)
+    return all_rows
 
-def tables_to_xlsx(all_tables):
+# ── XLSX export ───────────────────────────────────────────────────────────────
+def rows_to_xlsx(all_rows):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
-    wb = Workbook(); ws = wb.active; ws.title = 'Sheet1'
-    hdr_fill = PatternFill(start_color='1F4E79', end_color='1F4E79', fill_type='solid')
-    alt_fill = PatternFill(start_color='EBF3FA', end_color='EBF3FA', fill_type='solid')
-    hdr_font = Font(bold=True, color='FFFFFF', size=10)
-    norm_font = Font(size=10)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Sheet1'
+
     thin = Side(style='thin', color='CCCCCC')
     bdr = Border(left=thin, right=thin, top=thin, bottom=thin)
-    current_row = 1; col_max = {}
-    for t_idx, tbl in enumerate(all_tables):
-        data = tbl.get('data', [])
-        if not data: continue
-        if t_idx > 0: current_row += 1
-        max_cols = max(len(r) for r in data)
-        for r_idx, row in enumerate(data):
-            is_hdr = r_idx == 0 and not tbl.get('fallback')
-            for c_idx in range(max_cols):
-                val = str(row[c_idx]).strip() if c_idx < len(row) else ''
-                cell = ws.cell(row=current_row, column=c_idx+1, value=val)
-                cell.border = bdr
-                col_max[c_idx+1] = max(col_max.get(c_idx+1, 8), len(val))
-                if is_hdr:
-                    cell.fill = hdr_fill; cell.font = hdr_font
-                    cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-                elif r_idx % 2 == 0:
-                    cell.fill = alt_fill; cell.font = norm_font
-                    cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
-                else:
-                    cell.font = norm_font
-                    cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
-            current_row += 1
-    for col_idx, max_len in col_max.items():
-        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 3, 50)
+    hdr_fill = PatternFill(start_color='1F4E79', end_color='1F4E79', fill_type='solid')
+    alt_fill = PatternFill(start_color='EBF3FA', end_color='EBF3FA', fill_type='solid')
+
+    if not all_rows:
+        return None
+
+    max_cols = max(len(r) for r in all_rows)
+    col_max = {}
+
+    for r_idx, row in enumerate(all_rows):
+        is_hdr = r_idx == 0
+        for c_idx in range(max_cols):
+            val = row[c_idx] if c_idx < len(row) else ''
+            cell = ws.cell(row=r_idx + 1, column=c_idx + 1, value=val)
+            cell.border = bdr
+            cell.font = Font(bold=True, color='FFFFFF', size=10) if is_hdr else Font(size=10)
+            cell.fill = hdr_fill if is_hdr else (alt_fill if r_idx % 2 == 0 else PatternFill())
+            cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
+            col_max[c_idx + 1] = max(col_max.get(c_idx + 1, 8), len(val))
+
+    for ci, ml in col_max.items():
+        ws.column_dimensions[get_column_letter(ci)].width = min(ml + 3, 50)
     ws.freeze_panes = 'A2'
-    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
     return buf.read()
 
 # ── Main route ────────────────────────────────────────────────────────────────
@@ -135,29 +108,40 @@ def convert():
             return jsonify({'error': 'No file provided'}), 400
 
         pdf_bytes = base64.b64decode(file_b64)
+        pdf_type = detect_pdf_type(pdf_bytes)
         out_name = file_name.rsplit('.', 1)[0] + '.xlsx'
+        warning = None
 
-        # Try pdf.co first
-        try:
-            xlsx_bytes = convert_via_pdfco(pdf_bytes, file_name)
-            xlsx_b64 = base64.b64encode(xlsx_bytes).decode('utf-8')
-            return jsonify({'base64': xlsx_b64, 'fileName': out_name, 'method': 'pdfco', 'warning': None})
-        except Exception as e:
-            print(f'pdf.co failed: {e}, falling back to pdfplumber')
+        if pdf_type == 'text':
+            rows = extract_with_pdfplumber(pdf_bytes)
+            if not rows:
+                return jsonify({'error': 'No content could be extracted from this PDF.'}), 422
+            xlsx_bytes = rows_to_xlsx(rows)
+            method = 'pdfplumber'
+        else:
+            # Scanned PDF — warn user, try pdfplumber anyway
+            rows = extract_with_pdfplumber(pdf_bytes)
+            warning = 'Scanned PDF detected. Results may be lower accuracy.'
+            if not rows:
+                return jsonify({'error': 'No content could be extracted. This appears to be a scanned image PDF.'}), 422
+            xlsx_bytes = rows_to_xlsx(rows)
+            method = 'pdfplumber-scanned'
 
-        # Fallback: pdfplumber
-        tables = extract_with_pdfplumber(pdf_bytes)
-        if not tables:
-            return jsonify({'error': 'Could not extract content from this PDF.'}), 422
+        if not xlsx_bytes:
+            return jsonify({'error': 'Failed to generate Excel file.'}), 500
 
-        xlsx_bytes = tables_to_xlsx(tables)
         xlsx_b64 = base64.b64encode(xlsx_bytes).decode('utf-8')
-        has_fallback = any(t.get('fallback') for t in tables)
-        warning = 'No clear table structure detected. Text extracted in approximate layout.' if has_fallback else None
-        return jsonify({'base64': xlsx_b64, 'fileName': out_name, 'method': 'pdfplumber', 'warning': warning})
+        return jsonify({
+            'base64': xlsx_b64,
+            'fileName': out_name,
+            'pdfType': pdf_type,
+            'method': method,
+            'warning': warning
+        })
 
     except Exception as e:
         import traceback
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/health', methods=['GET'])
@@ -168,8 +152,11 @@ def health():
 def keep_alive():
     time.sleep(60)
     while True:
-        try: urllib.request.urlopen('https://onetapconvert-pdf-api.onrender.com/health', timeout=10)
-        except: pass
+        try:
+            host = os.environ.get('RAILWAY_PUBLIC_DOMAIN') or 'onetapconvert-pdf-api.onrender.com'
+            urllib.request.urlopen(f'https://{host}/health', timeout=10)
+        except:
+            pass
         time.sleep(600)
 
 threading.Thread(target=keep_alive, daemon=True).start()
