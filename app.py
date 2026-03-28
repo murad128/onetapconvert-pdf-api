@@ -201,8 +201,16 @@ def office_to_pdf():
                 f.write(file_bytes)
 
             # Run LibreOffice headless conversion
+            # Use pdf:writer_pdf_Export with scale settings for PPTX
+            ext = os.path.splitext(file_name)[1].lower()
+            if ext in ['.pptx', '.ppt']:
+                convert_to = 'pdf:impress_pdf_Export:{"ReduceImageResolution":{"type":"boolean","value":"false"},"IsSkipEmptyPages":{"type":"boolean","value":"false"}}'
+            else:
+                convert_to = 'pdf'
+
             result = subprocess.run([
-                'libreoffice', '--headless', '--convert-to', 'pdf',
+                'libreoffice', '--headless',
+                '--convert-to', convert_to,
                 '--outdir', tmpdir, in_path
             ], capture_output=True, text=True, timeout=60)
 
