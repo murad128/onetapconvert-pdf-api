@@ -54,25 +54,48 @@ def write_sheet(ws, rows):
     thin = Side(style='thin', color='CCCCCC')
     bdr = Border(left=thin, right=thin, top=thin, bottom=thin)
     hdr_fill = PatternFill(start_color='1F4E79', end_color='1F4E79', fill_type='solid')
-    alt_fill = PatternFill(start_color='EBF3FA', end_color='EBF3FA', fill_type='solid')
+    alt_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
+    no_fill = PatternFill()
 
     max_cols = max(len(r) for r in rows) if rows else 0
     col_max = {}
 
+    # Detect key-value table (2 cols, no obvious header)
+    is_kv_table = max_cols == 2
+
+    # Detect if first row is a real header (all caps or common header words)
+    def is_header_row(row):
+        vals = [str(v).strip() for v in row if str(v).strip()]
+        if not vals: return False
+        header_words = {'no', 'oem', 'fmsi', 'description', 'qty', 'price', 'amount', 'item', '#'}
+        return any(v.lower() in header_words or v.isupper() for v in vals)
+
+    has_header = not is_kv_table and is_header_row(rows[0]) if rows else False
+
     for r_idx, row in enumerate(rows):
-        is_hdr = r_idx == 0
+        is_hdr = has_header and r_idx == 0
         for c_idx in range(max_cols):
             val = row[c_idx] if c_idx < len(row) else ''
             cell = ws.cell(row=r_idx + 1, column=c_idx + 1, value=val)
             cell.border = bdr
-            cell.font = Font(bold=True, color='FFFFFF', size=10) if is_hdr else Font(size=10)
-            cell.fill = hdr_fill if is_hdr else (alt_fill if r_idx % 2 == 0 else PatternFill())
             cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
             col_max[c_idx + 1] = max(col_max.get(c_idx + 1, 8), len(str(val)))
 
+            if is_hdr:
+                cell.font = Font(bold=True, color='FFFFFF', size=10)
+                cell.fill = hdr_fill
+            elif is_kv_table:
+                # Key-value: left col normal, right col bold
+                cell.font = Font(bold=(c_idx == 1), size=10)
+                cell.fill = alt_fill if r_idx % 2 == 0 else no_fill
+            else:
+                cell.font = Font(size=10)
+                cell.fill = alt_fill if r_idx % 2 == 0 else no_fill
+
     for ci, ml in col_max.items():
         ws.column_dimensions[get_column_letter(ci)].width = min(ml + 3, 50)
-    if rows:
+
+    if has_header and rows:
         ws.freeze_panes = 'A2'
 
 def tables_to_xlsx(all_tables):
