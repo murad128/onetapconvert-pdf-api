@@ -241,6 +241,34 @@ def office_to_pdf():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/feedback', methods=['POST'])
+def feedback():
+    import urllib.request as ur
+    try:
+        data = request.get_json()
+        message = data.get('message', '').strip()
+        if not message:
+            return jsonify({'error': 'No message'}), 400
+
+        BOT_TOKEN = '8798510190:AAEwnO5ZjICKqL6MTiLlcCaqBQJ1aTJUO4A'
+        CHAT_ID = '1871988010'
+
+        text = f"🔔 *OneTapConvert Feedback*\n\n📝 *Mesaj:* {message}"
+        if data.get('email'):
+            text += f"\n📧 *Email:* {data['email']}"
+        if data.get('url'):
+            text += f"\n🔗 *Səhifə:* {data['url']}"
+
+        req = ur.Request(
+            f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage',
+            data=json.dumps({'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'Markdown'}).encode(),
+            headers={'Content-Type': 'application/json'}
+        )
+        ur.urlopen(req, timeout=10)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok'})
