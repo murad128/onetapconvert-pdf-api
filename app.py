@@ -273,6 +273,78 @@ def feedback():
 def health():
     return jsonify({'status': 'ok'})
 
+# ── United Center CMS ─────────────────────────────────────────────────────────
+import sqlite3, hashlib
+
+UC_DB = '/tmp/uc_content.db'
+UC_ADMIN_HASH = hashlib.sha256('Admin12345'.encode()).hexdigest()
+
+def uc_db():
+    conn = sqlite3.connect(UC_DB)
+    conn.execute('''CREATE TABLE IF NOT EXISTS content (
+        id TEXT PRIMARY KEY DEFAULT 'main',
+        data TEXT NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+    )''')
+    conn.commit()
+    return conn
+
+DEFAULT_CONTENT = {
+  "contact": {"phone": "+994 50 204 64 30", "phoneRaw": "+994502046430", "address": "Səttar Bəhlulzadə 157", "whatsapp": "994502046430", "email": "", "hoursWeekday": "09:00 – 18:00", "hoursSaturday": "09:00 – 14:00"},
+  "hero": {"title": "Uşağınızın potensialını", "titleSpan": "birlikdə açaq", "subtitle": "United Center-də hər uşaq xüsusidir. Autizm dəstəyi, nitq terapiyası, psixoloji yardım və fərdi inkişaf proqramları ilə yanınızdayıq."},
+  "stats": {"children": "100", "childrenSuffix": "+", "experience": "5", "experienceSuffix": "+", "specialists": "8", "specialistsSuffix": "+", "satisfaction": "95", "satisfactionSuffix": "%"},
+  "team": [
+    {"name": "Dr. Aynur Məmmədova", "role": "Baş Psixoloq", "desc": "10 ildən artıq uşaq psixologiyası sahəsində təcrübəyə malikdir.", "initials": "AM", "color1": "#17B8A6", "color2": "#0e9e8e"},
+    {"name": "Gülnar Əliyeva", "role": "Nitq Terapevti / Loqoped", "desc": "Nitq pozğunluqları və kommunikasiya inkişafı üzrə mütəxəssis.", "initials": "GƏ", "color1": "#4CAF50", "color2": "#388E3C"},
+    {"name": "Nigar Hüseynova", "role": "Xüsusi Müəllim", "desc": "Fərdi öyrənmə planları ilə uşaqların potensialını açır.", "initials": "NH", "color1": "#2196F3", "color2": "#1565C0"},
+    {"name": "Rauf Quliyev", "role": "Davranış Mütəxəssisi", "desc": "ABA terapiyası üzrə sertifikatlaşmış mütəxəssis.", "initials": "RQ", "color1": "#FF9800", "color2": "#E65100"},
+    {"name": "Sevinc İsmayılova", "role": "Uşaq İnkişaf Mütəxəssisi", "desc": "Erkən müdaxilə və kompleks inkişaf proqramları üzrə təcrübəli.", "initials": "Sİ", "color1": "#9C27B0", "color2": "#6A1B9A"}
+  ],
+  "services": [
+    {"icon": "🧩", "name": "Autizm Dəstəyi", "desc": "Fərdi rehabilitasiya proqramları"},
+    {"icon": "🗣️", "name": "Nitq Terapiyası", "desc": "Loqoped ilə nitq inkişafı"},
+    {"icon": "🧠", "name": "Psixoloji Dəstək", "desc": "Uşaq psixoloqu ilə iş"},
+    {"icon": "📚", "name": "Xüsusi Təhsil", "desc": "Fərdi öyrənmə planları"},
+    {"icon": "🌱", "name": "Uşaq İnkişafı", "desc": "Kompleks inkişaf proqramları"},
+    {"icon": "🎯", "name": "Davranış Terapiyası", "desc": "ABA əsaslı yanaşma"},
+    {"icon": "🤲", "name": "Sensor İnteqrasiya", "desc": "Hiss sisteminin inkişafı"},
+    {"icon": "👨‍👩‍👧", "name": "Valideyn Konsultasiyası", "desc": "Evdə dəstək strategiyaları"},
+    {"icon": "📋", "name": "Fərdi Proqramlar", "desc": "Hər uşaq üçün xüsusi plan"}
+  ],
+  "testimonials": [
+    {"name": "Leyla X.", "info": "Valideyn", "initials": "LX", "color": "#17B8A6", "text": "Oğlumun nitqi 3 ayda əhəmiyyətli dərəcədə inkişaf etdi.", "stars": 5},
+    {"name": "Kamran M.", "info": "Valideyn", "initials": "KM", "color": "#4CAF50", "text": "Qızımız burada çox irəlilədi. Mütəxəssislər həm peşəkar, həm də mehriban.", "stars": 5},
+    {"name": "Aynur R.", "info": "Valideyn", "initials": "AR", "color": "#2196F3", "text": "United Center-in fərdi yanaşması bizim üçün çox böyük fərq yaratdı.", "stars": 5}
+  ]
+}
+
+@app.route('/uc/content', methods=['GET'])
+def uc_get_content():
+    conn = uc_db()
+    row = conn.execute('SELECT data FROM content WHERE id="main"').fetchone()
+    conn.close()
+    if row:
+        return app.response_class(response=row[0], mimetype='application/json')
+    return jsonify(DEFAULT_CONTENT)
+
+@app.route('/uc/content', methods=['PUT'])
+def uc_put_content():
+    auth = request.headers.get('X-Admin-Password', '')
+    if hashlib.sha256(auth.encode()).hexdigest() != UC_ADMIN_HASH:
+        return jsonify({'error': 'Unauthorized'}), 401
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data'}), 400
+        json_str = json.dumps(data, ensure_ascii=False)
+        conn = uc_db()
+        conn.execute('INSERT OR REPLACE INTO content (id, data, updated_at) VALUES ("main", ?, datetime("now"))', (json_str,))
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True, 'updated': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 # ── Keep-alive ────────────────────────────────────────────────────────────────
 def keep_alive():
     time.sleep(60)
