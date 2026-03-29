@@ -274,20 +274,21 @@ def health():
     return jsonify({'status': 'ok'})
 
 # ── United Center CMS ─────────────────────────────────────────────────────────
-import sqlite3, hashlib
+import hashlib
 
-UC_DB = '/tmp/uc_content.db'
+UC_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uc_content.json')
 UC_ADMIN_HASH = hashlib.sha256('Admin12345'.encode()).hexdigest()
 
-def uc_db():
-    conn = sqlite3.connect(UC_DB)
-    conn.execute('''CREATE TABLE IF NOT EXISTS content (
-        id TEXT PRIMARY KEY DEFAULT 'main',
-        data TEXT NOT NULL,
-        updated_at TEXT DEFAULT (datetime('now'))
-    )''')
-    conn.commit()
-    return conn
+def uc_read():
+    try:
+        with open(UC_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return None
+
+def uc_write(data):
+    with open(UC_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 DEFAULT_CONTENT = {
   "contact": {"phone": "+994 50 204 64 30", "phoneRaw": "+994502046430", "address": "Səttar Bəhlulzadə 157", "whatsapp": "994502046430", "email": "", "hoursWeekday": "09:00 – 18:00", "hoursSaturday": "09:00 – 14:00"},
@@ -320,11 +321,9 @@ DEFAULT_CONTENT = {
 
 @app.route('/uc/content', methods=['GET'])
 def uc_get_content():
-    conn = uc_db()
-    row = conn.execute('SELECT data FROM content WHERE id="main"').fetchone()
-    conn.close()
-    if row:
-        return app.response_class(response=row[0], mimetype='application/json')
+    data = uc_read()
+    if data:
+        return jsonify(data)
     return jsonify(DEFAULT_CONTENT)
 
 @app.route('/uc/content', methods=['PUT'])
@@ -336,12 +335,8 @@ def uc_put_content():
         data = request.get_json()
         if not data:
             return jsonify({'error': 'No data'}), 400
-        json_str = json.dumps(data, ensure_ascii=False)
-        conn = uc_db()
-        conn.execute('INSERT OR REPLACE INTO content (id, data, updated_at) VALUES ("main", ?, datetime("now"))', (json_str,))
-        conn.commit()
-        conn.close()
-        return jsonify({'ok': True, 'updated': True})
+        uc_write(data)
+        return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
