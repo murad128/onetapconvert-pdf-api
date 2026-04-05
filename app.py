@@ -537,6 +537,39 @@ def ocr_pdf():
         return jsonify({'error': str(e)}), 500
 
 
+
+@app.route('/ocr-pdf-upload', methods=['POST'])
+def ocr_pdf_upload():
+    """OCR via multipart/form-data — avoids base64 overhead on mobile"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+        f = request.files['file']
+        lang = request.form.get('lang', 'eng')
+        pdf_bytes = f.read()
+        file_name = f.filename or 'input.pdf'
+
+        try:
+            from pdf2image import convert_from_bytes
+            import pytesseract
+            images = convert_from_bytes(pdf_bytes, dpi=200)
+            texts = []
+            for img in images:
+                t = pytesseract.image_to_string(img, lang=lang)
+                texts.append(t)
+            full_text = '\n\n--- Page Break ---\n\n'.join(texts)
+            return jsonify({'text': full_text, 'pages': len(images)})
+        except ImportError:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                texts = [(page.extract_text() or '') for page in pdf.pages]
+            full_text = '\n\n--- Page Break ---\n\n'.join(texts)
+            if not full_text.strip():
+                return jsonify({'error': 'No text found in PDF. OCR requires pytesseract on the server.'}), 422
+            return jsonify({'text': full_text, 'pages': len(texts)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 # ── Keep-alive ────────────────────────────────────────────────────────────────
 def keep_alive():
     time.sleep(60)
