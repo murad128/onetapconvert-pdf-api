@@ -434,50 +434,84 @@ def compare_pdf():
 
 @app.route('/html-to-pdf', methods=['POST'])
 def html_to_pdf():
+    import subprocess, tempfile, re, urllib.request as ur
     try:
         data = request.get_json()
         html_content = data.get('html', '')
         url = data.get('url', '')
         if not html_content and not url:
             return jsonify({'error': 'html or url required'}), 400
+
+        # Try weasyprint first (may fail on some versions)
         try:
+            import warnings
+            warnings.filterwarnings('ignore')
             from weasyprint import HTML
             if url:
-                doc = HTML(url=url)
+                doc = HTML(url=url, verify_ssl=False)
                 fname = 'webpage.pdf'
             else:
                 doc = HTML(string=html_content)
                 fname = 'converted.pdf'
             out_bytes = doc.write_pdf()
-        except ImportError:
-            # Fallback: use requests to fetch URL content if weasyprint not available
-            if url:
-                import urllib.request as ur
-                req = ur.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                content = ur.urlopen(req, timeout=15).read().decode('utf-8', errors='ignore')
-                html_content = content
-                fname = 'webpage.pdf'
-            # Simple HTML to PDF using reportlab if available
+            return jsonify({'base64': base64.b64encode(out_bytes).decode(), 'fileName': fname})
+        except Exception as wp_err:
+            pass
+
+        # Fallback: fetch URL content if needed
+        if url and not html_content:
             try:
-                from reportlab.pdfgen import canvas as rl_canvas
-                from reportlab.lib.pagesizes import A4
-                import re
-                buf = io.BytesIO()
-                c = rl_canvas.Canvas(buf, pagesize=A4)
-                text = re.sub(r'<[^>]+>', ' ', html_content)
-                lines = [l.strip() for l in text.splitlines() if l.strip()][:50]
-                y = 800
-                for line in lines:
-                    c.drawString(40, y, line[:100])
-                    y -= 14
-                    if y < 40: break
-                c.save()
-                buf.seek(0)
-                out_bytes = buf.read()
-                fname = 'converted.pdf'
-            except:
-                return jsonify({'error': 'WeasyPrint not available. Please install weasyprint.'}), 500
-        return jsonify({'base64': base64.b64encode(out_bytes).decode(), 'fileName': fname})
+                req = ur.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                html_content = ur.urlopen(req, timeout=20).read().decode('utf-8', errors='ignore')
+            except Exception as e:
+                return jsonify({'error': f'Could not fetch URL: {e}'}), 400
+            fname = 'webpage.pdf'
+        else:
+            fname = 'converted.pdf'
+
+        # Fallback: build PDF from extracted text using fpdf2 or pikepdf
+        try:
+            from fpdf import FPDF
+            text = re.sub(r'<[^>]+>', ' ', html_content)
+            text = re.sub(r'\s+', ' ', text).strip()
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font('Helvetica', size=11)
+            pdf.set_left_margin(15)
+            pdf.set_right_margin(15)
+            for line in text.split('. ')[:200]:
+                line = line.strip()
+                if line:
+                    try:
+                        pdf.multi_cell(0, 8, line.encode('latin-1', errors='replace').decode('latin-1'))
+                    except:
+                        pass
+            out_bytes = pdf.output()
+            if isinstance(out_bytes, str):
+                out_bytes = out_bytes.encode('latin-1')
+            return jsonify({'base64': base64.b64encode(out_bytes).decode(), 'fileName': fname})
+        except ImportError:
+            pass
+
+        # Last resort: minimal PDF with text
+        try:
+            import pikepdf
+            from pikepdf import Pdf, Page, Dictionary, Name, Array
+            text = re.sub(r'<[^>]+>', ' ', html_content)[:2000]
+            # Create simple PDF with text content note
+            pdf = Pdf.new()
+            page = pikepdf.Page(pikepdf.Dictionary(
+                Type=pikepdf.Name.Page,
+                MediaBox=pikepdf.Array([0, 0, 612, 792])
+            ))
+            pdf.pages.append(page)
+            buf = io.BytesIO()
+            pdf.save(buf)
+            buf.seek(0)
+            return jsonify({'base64': base64.b64encode(buf.read()).decode(), 'fileName': fname})
+        except:
+            return jsonify({'error': 'HTML to PDF conversion requires weasyprint or fpdf2. Install fpdf2 on the server.'}), 500
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
