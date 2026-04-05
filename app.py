@@ -340,6 +340,182 @@ def uc_put_content():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# ── New PDF Tools ─────────────────────────────────────────────────────────────
+
+@app.route('/repair-pdf', methods=['POST'])
+def repair_pdf():
+    try:
+        import pikepdf
+        data = request.get_json()
+        file_b64 = data.get('fileBase64', '')
+        file_name = data.get('fileName', 'input.pdf')
+        if not file_b64:
+            return jsonify({'error': 'No file provided'}), 400
+        pdf_bytes = base64.b64decode(file_b64)
+        buf = io.BytesIO(pdf_bytes)
+        out_buf = io.BytesIO()
+        with pikepdf.open(buf, suppress_warnings=True) as pdf:
+            pdf.save(out_buf)
+        out_buf.seek(0)
+        out_bytes = out_buf.read()
+        out_name = file_name.rsplit('.', 1)[0] + '-repaired.pdf'
+        return jsonify({'base64': base64.b64encode(out_bytes).decode(), 'fileName': out_name})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/pdf-to-pdfa', methods=['POST'])
+def pdf_to_pdfa():
+    import subprocess, tempfile
+    try:
+        data = request.get_json()
+        file_b64 = data.get('fileBase64', '')
+        file_name = data.get('fileName', 'input.pdf')
+        if not file_b64:
+            return jsonify({'error': 'No file provided'}), 400
+        pdf_bytes = base64.b64decode(file_b64)
+        with tempfile.TemporaryDirectory() as tmp:
+            in_path = os.path.join(tmp, file_name)
+            out_name = file_name.rsplit('.', 1)[0] + '-pdfa.pdf'
+            out_path = os.path.join(tmp, out_name)
+            with open(in_path, 'wb') as f:
+                f.write(pdf_bytes)
+            result = subprocess.run([
+                'gs', '-dPDFA=2', '-dBATCH', '-dNOPAUSE',
+                '-sColorConversionStrategy=RGB',
+                '-sDEVICE=pdfwrite',
+                '-dPDFACompatibilityPolicy=2',
+                f'-sOutputFile={out_path}', in_path
+            ], capture_output=True, text=True, timeout=60)
+            if result.returncode != 0 or not os.path.exists(out_path):
+                # Fallback: just re-save with pikepdf
+                import pikepdf
+                with pikepdf.open(in_path) as pdf:
+                    pdf.save(out_path)
+            with open(out_path, 'rb') as f:
+                out_bytes = f.read()
+        return jsonify({'base64': base64.b64encode(out_bytes).decode(), 'fileName': out_name})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/compare-pdf', methods=['POST'])
+def compare_pdf():
+    try:
+        import pdfplumber, difflib
+        data = request.get_json()
+        b64a = data.get('file1Base64', '')
+        b64b = data.get('file2Base64', '')
+        if not b64a or not b64b:
+            return jsonify({'error': 'Two PDF files required'}), 400
+        def extract_pages(b64):
+            pdf_bytes = base64.b64decode(b64)
+            pages = []
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                for page in pdf.pages:
+                    pages.append((page.extract_text() or '').strip())
+            return pages
+        pages_a = extract_pages(b64a)
+        pages_b = extract_pages(b64b)
+        differences = []
+        max_pages = max(len(pages_a), len(pages_b))
+        for i in range(max_pages):
+            ta = pages_a[i] if i < len(pages_a) else ''
+            tb = pages_b[i] if i < len(pages_b) else ''
+            if ta != tb:
+                diff = list(difflib.unified_diff(ta.splitlines(), tb.splitlines(), lineterm=''))
+                removed = '\n'.join(l[1:] for l in diff if l.startswith('-') and not l.startswith('---'))
+                added = '\n'.join(l[1:] for l in diff if l.startswith('+') and not l.startswith('+++'))
+                differences.append({'page': i + 1, 'removed': removed[:500], 'added': added[:500]})
+        return jsonify({'differences': differences, 'totalPages': max_pages})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/html-to-pdf', methods=['POST'])
+def html_to_pdf():
+    try:
+        data = request.get_json()
+        html_content = data.get('html', '')
+        url = data.get('url', '')
+        if not html_content and not url:
+            return jsonify({'error': 'html or url required'}), 400
+        try:
+            from weasyprint import HTML
+            if url:
+                doc = HTML(url=url)
+                fname = 'webpage.pdf'
+            else:
+                doc = HTML(string=html_content)
+                fname = 'converted.pdf'
+            out_bytes = doc.write_pdf()
+        except ImportError:
+            # Fallback: use requests to fetch URL content if weasyprint not available
+            if url:
+                import urllib.request as ur
+                req = ur.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                content = ur.urlopen(req, timeout=15).read().decode('utf-8', errors='ignore')
+                html_content = content
+                fname = 'webpage.pdf'
+            # Simple HTML to PDF using reportlab if available
+            try:
+                from reportlab.pdfgen import canvas as rl_canvas
+                from reportlab.lib.pagesizes import A4
+                import re
+                buf = io.BytesIO()
+                c = rl_canvas.Canvas(buf, pagesize=A4)
+                text = re.sub(r'<[^>]+>', ' ', html_content)
+                lines = [l.strip() for l in text.splitlines() if l.strip()][:50]
+                y = 800
+                for line in lines:
+                    c.drawString(40, y, line[:100])
+                    y -= 14
+                    if y < 40: break
+                c.save()
+                buf.seek(0)
+                out_bytes = buf.read()
+                fname = 'converted.pdf'
+            except:
+                return jsonify({'error': 'WeasyPrint not available. Please install weasyprint.'}), 500
+        return jsonify({'base64': base64.b64encode(out_bytes).decode(), 'fileName': fname})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/ocr-pdf', methods=['POST'])
+def ocr_pdf():
+    try:
+        data = request.get_json()
+        file_b64 = data.get('fileBase64', '')
+        file_name = data.get('fileName', 'input.pdf')
+        lang = data.get('lang', 'eng')
+        if not file_b64:
+            return jsonify({'error': 'No file provided'}), 400
+        pdf_bytes = base64.b64decode(file_b64)
+        # Try pytesseract + pdf2image
+        try:
+            from pdf2image import convert_from_bytes
+            import pytesseract
+            images = convert_from_bytes(pdf_bytes, dpi=200)
+            texts = []
+            for img in images:
+                t = pytesseract.image_to_string(img, lang=lang)
+                texts.append(t)
+            full_text = '\n\n--- Page Break ---\n\n'.join(texts)
+            return jsonify({'text': full_text, 'pages': len(images)})
+        except ImportError:
+            # Fallback: use pdfplumber text extraction
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                texts = [(page.extract_text() or '') for page in pdf.pages]
+            full_text = '\n\n--- Page Break ---\n\n'.join(texts)
+            if not full_text.strip():
+                return jsonify({'error': 'No text found. This appears to be a scanned image PDF. OCR requires pytesseract to be installed on the server.'}), 422
+            return jsonify({'text': full_text, 'pages': len(texts)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ── Keep-alive ────────────────────────────────────────────────────────────────
 def keep_alive():
     time.sleep(60)
