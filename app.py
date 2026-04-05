@@ -442,21 +442,8 @@ def html_to_pdf():
         if not html_content and not url:
             return jsonify({'error': 'html or url required'}), 400
 
-        # Try weasyprint first (may fail on some versions)
-        try:
-            import warnings
-            warnings.filterwarnings('ignore')
-            from weasyprint import HTML
-            if url:
-                doc = HTML(url=url, verify_ssl=False)
-                fname = 'webpage.pdf'
-            else:
-                doc = HTML(string=html_content)
-                fname = 'converted.pdf'
-            out_bytes = doc.write_pdf()
-            return jsonify({'base64': base64.b64encode(out_bytes).decode(), 'fileName': fname})
-        except Exception as wp_err:
-            pass
+        # Skip weasyprint (version incompatibility), use fpdf2 directly
+        pass
 
         # Fallback: fetch URL content if needed
         if url and not html_content:
