@@ -1,0 +1,5 @@
+[phases.setup]
+nixPkgs = ["ghostscript", "tesseract", "poppler_utils"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
