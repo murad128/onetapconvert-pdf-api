@@ -570,6 +570,108 @@ def ocr_pdf_upload():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+# ── OneTapConvert CMS ─────────────────────────────────────────────────────────
+import hashlib, json as _json
+
+OTC_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'otc_content.json')
+OTC_ADMIN_HASH = hashlib.sha256('OtcAdmin2026!'.encode()).hexdigest()
+
+OTC_DEFAULT = {
+  "hero": {
+    "chip": "Processing happens right in your browser",
+    "h1": "Every file tool<br>you actually <em>need</em>",
+    "sub": "Convert, merge, split, compress, and rotate files — instantly, privately, for free. No account. No limits. No nonsense.",
+    "stat1": "Files never leave your device",
+    "stat2": "Instant processing",
+    "stat3": "No waiting, no uploads"
+  },
+  "footer": "Free file tools. No sign-up. Always private. © 2026",
+  "faq": [
+    {"q": "Is this tool really free?", "a": "Yes, 100% free. No limits, no watermarks, no premium tier."},
+    {"q": "Do I need to install software?", "a": "No. Everything works in your browser. Just visit and start converting."},
+    {"q": "Is my file kept private?", "a": "Yes. Files are processed securely and never stored or shared."},
+    {"q": "What devices are supported?", "a": "All devices — Windows, Mac, Linux, iOS, and Android."}
+  ],
+  "groups": [
+    {"label": "Convert to PDF", "ids": ["word-pdf","excel-pdf","ppt-pdf","img-pdf"]},
+    {"label": "Convert from PDF", "ids": ["pdf-word","pdf-excel","pdf-ppt","pdf-img"]},
+    {"label": "Manage PDF", "ids": ["merge","split","compress","rotate"]},
+    {"label": "Organize & Edit", "ids": ["ext-organize","ext-remove","ext-extract","ext-watermark","ext-pagenums","ext-sign"]},
+    {"label": "Security", "ids": ["ext-protect","ext-unlock"]},
+    {"label": "OCR & AI", "ids": ["ext-ocr","ext-ai","ext-scan"]},
+    {"label": "Advanced", "ids": ["ext-repair","ext-compare","ext-html","ext-pdfa"]},
+    {"label": "Image Tools", "ids": ["img-convert"]}
+  ],
+  "tools": {
+    "word-pdf":    ["Word → PDF", "Turn .docx into a PDF"],
+    "excel-pdf":   ["Excel → PDF", "Spreadsheets to PDF"],
+    "ppt-pdf":     ["PowerPoint → PDF", "Slides to PDF"],
+    "img-pdf":     ["Image → PDF", "JPG, PNG, WebP → PDF"],
+    "pdf-word":    ["PDF → DOCX", "Extract text to Word"],
+    "pdf-excel":   ["PDF → XLSX", "Extract tables to Excel"],
+    "pdf-ppt":     ["PDF → PPTX", "Pages to slide deck"],
+    "pdf-img":     ["PDF → Image", "Export pages as PNG/JPG"],
+    "merge":       ["Merge PDF", "Combine multiple files"],
+    "split":       ["Split PDF", "Extract page ranges"],
+    "compress":    ["Compress PDF", "Reduce file size"],
+    "rotate":      ["Rotate PDF", "Rotate pages freely"],
+    "img-convert": ["Image Convert", "JPG, PNG, WebP ↔ Convert"],
+    "ext-organize":["Organize PDF", "Reorder, delete & rearrange pages"],
+    "ext-remove":  ["Remove Pages", "Delete specific pages from PDF"],
+    "ext-extract": ["Extract Pages", "Extract pages to a new PDF"],
+    "ext-watermark":["Add Watermark","Add text watermark to PDF"],
+    "ext-pagenums":["Add Page Numbers","Number your PDF pages"],
+    "ext-sign":    ["Sign PDF", "Draw or type signature on PDF"],
+    "ext-protect": ["Protect PDF", "Add password protection"],
+    "ext-unlock":  ["Unlock PDF", "Remove PDF password"],
+    "ext-ocr":     ["OCR PDF", "Extract text from scanned PDF"],
+    "ext-ai":      ["AI Summarizer", "Summarize PDF content"],
+    "ext-scan":    ["Scan to PDF", "Photos & images to PDF"],
+    "ext-repair":  ["Repair PDF", "Fix corrupted PDF files"],
+    "ext-compare": ["Compare PDF", "Find differences between PDFs"],
+    "ext-html":    ["HTML to PDF", "Convert webpage to PDF"],
+    "ext-pdfa":    ["PDF to PDF/A", "Convert to archive format"]
+  }
+}
+
+def otc_read():
+    try:
+        with open(OTC_FILE, 'r', encoding='utf-8') as f:
+            return _json.load(f)
+    except:
+        return OTC_DEFAULT
+
+def otc_write(data):
+    with open(OTC_FILE, 'w', encoding='utf-8') as f:
+        _json.dump(data, f, ensure_ascii=False, indent=2)
+
+@app.route('/otc/content', methods=['GET'])
+def otc_get():
+    return jsonify(otc_read())
+
+@app.route('/otc/content', methods=['PUT'])
+def otc_put():
+    pw = request.headers.get('X-Admin-Password', '')
+    if hashlib.sha256(pw.encode()).hexdigest() != OTC_ADMIN_HASH:
+        return jsonify({'error': 'Unauthorized'}), 401
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data'}), 400
+        otc_write(data)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/otc/reset', methods=['POST'])
+def otc_reset():
+    pw = request.headers.get('X-Admin-Password', '')
+    if hashlib.sha256(pw.encode()).hexdigest() != OTC_ADMIN_HASH:
+        return jsonify({'error': 'Unauthorized'}), 401
+    otc_write(OTC_DEFAULT)
+    return jsonify({'ok': True, 'msg': 'Reset to defaults'})
+
 # ── Keep-alive ────────────────────────────────────────────────────────────────
 def keep_alive():
     time.sleep(60)
