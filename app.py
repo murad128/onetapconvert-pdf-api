@@ -646,6 +646,15 @@ def otc_write(data):
     with open(OTC_FILE, 'w', encoding='utf-8') as f:
         _json.dump(data, f, ensure_ascii=False, indent=2)
 
+
+@app.route('/otc/verify', methods=['POST'])
+def otc_verify():
+    import hashlib
+    pw = request.headers.get('X-Admin-Password', '')
+    if hashlib.sha256(pw.encode()).hexdigest() != OTC_ADMIN_HASH:
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify({'ok': True})
+
 @app.route('/otc/content', methods=['GET'])
 def otc_get():
     return jsonify(otc_read())
